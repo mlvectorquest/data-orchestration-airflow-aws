@@ -1,0 +1,7 @@
+# Airflow reads this with glob syntax (core.dag_ignore_file_syntax = glob in the
+# Udacity Workspace). Patterns match paths relative to this directory.
+#
+# When this repo is cloned into the workspace's airflow/dags folder, this keeps
+# the DAG parser from walking version-control internals on every parse cycle.
+.git
+.git/**
