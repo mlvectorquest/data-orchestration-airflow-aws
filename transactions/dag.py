@@ -1,18 +1,9 @@
 import json
 from pathlib import Path
-from airflow.sdk import TaskGroup
-
-# Import dag, task, and Asset objects
-#### YOUR CODE HERE
-
-# Import GlueJobOperator
-#### YOUR CODE HERE
-
-# Import SQLCheckOperator
-#### YOUR CODE HERE
-
-# Import S3Hook
-#### YOUR CODE HERE
+from airflow.sdk import DAG, Asset, TaskGroup, task
+from airflow.providers.amazon.aws.operators.glue import GlueJobOperator
+from airflow.providers.common.sql.operators.sql import SQLCheckOperator
+from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 
 CWD                    = Path(__file__).parent
 S3_BUCKET              = "{{ var.value.s3_bucket }}"
@@ -26,11 +17,9 @@ AWS_CONN_ID            = "aws_default"
 REGION                 = 'us-east-1'
 SQL_DIR                = Path(__file__).parent / 'sql'
 
-# Define an Asset used to trigger transactions when raw ingestion has completed
-#### YOUR CODE HERE
+RAW_INGESTION_COMPLETE = Asset("raw_ingestion_complete")
+TRANSACTIONS_COMPLETE = Asset("transactions_complete")
 
-# Define an Asset to indicate transactions has completed (Triggers analytics)
-#### YOUR CODE HERE
 
 # Each table declares its upstream transactions tables in `depends_on`.
 # An empty list means the table can be promoted as soon as the branch fires.
@@ -73,14 +62,13 @@ TABLES = [
     },
 ]
 
-# Initialize a dag
-# - Set the dag id to 'transactions'
-# - Set the schedule so the dag is triggered
-#   When a raw_ingestion_complete asset event
-#   is emitted
-# - Limit the active tasks to 2
-# - Limit the active runs to 1
-#### YOUR CODE HERE
+with DAG(
+    dag_id="transactions",
+    schedule=[RAW_INGESTION_COMPLETE],
+    max_active_tasks=2,
+    max_active_runs=1,
+) as dag:
+
 
     # Pull metadata from triggering asset event
     @task(inlets=[RAW_INGESTION_COMPLETE])
