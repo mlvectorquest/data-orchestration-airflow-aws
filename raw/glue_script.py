@@ -14,17 +14,9 @@ args = getResolvedOptions(sys.argv, [
 ])
 
 # ── Configure spark ───────────────────────────────────────────────────────────
-
-# Initialize a spark context
-#### YOUR CODE HERE
-
-# Wrap the spark context in a GlueContext
-#### YOUR CODE HERE
-
-# Store the glue context's spark_session to the variable `spark`
-#### YOUR CODE HERE
-
-# Init a glue job
+sc = SparkContext()
+glueContext = GlueContext(sc)
+spark = glueContext.spark_session
 job = Job(glueContext)
 job.init(args["JOB_NAME"], args) 
 
@@ -55,28 +47,19 @@ df = df.withColumn("data_interval", F.lit(data_interval))
 # ── Write to Iceberg ────────────────────────────────────────────────────────────
 
 # Check if the table exists
-#### YOUR CODE HERE
-
-    # If the table doesn't exists create the table and write 
-    # the raw data to it using iceberg
+if not spark.catalog.tableExists(ICEBERG_TABLE):
     (
         df
         .writeTo(ICEBERG_TABLE)
-        # Set "data_interval" as the partition column
-        #### YOUR CODE HERE
-        # Use Iceberg as the table format
-        #### YOUR CODE HERE
-        # Set Parquet as the storage format for data files
-        #### YOUR CODE HERE
-        # Snappy compression: high write speed, high read speed, moderate storage costs
+        .partitionedBy("data_interval")
+        .using("iceberg")
+        .tableProperty("write.format.default", "parquet")
         .tableProperty("write.parquet.compression-codec", "snappy")
         .create()
     )
     print(f"[{table}] Created Iceberg table: {ICEBERG_TABLE}")
 else:
-    # If the table exists, overwrite the partitions
-    # found in the raw data
-    #### YOUR CODE HERE
+    df.writeTo(ICEBERG_TABLE).overwritePartitions()
     print(f"[{table}] Overwrote partition data_interval={data_interval}")
 
 count = spark.sql(f"""
