@@ -14,6 +14,7 @@ WAREHOUSE_PATH         = f"s3://{S3_BUCKET}/iceberg-warehouse/transactions/"
 PROMOTE_SCRIPT         = CWD / "glue_script.py"
 GLUE_ROLE_NAME         = "dev-lakehouse-glue-role"
 AWS_CONN_ID            = "aws_default"
+ATHENA_CONN_ID         = "aws_default"
 REGION                 = 'us-east-1'
 SQL_DIR                = Path(__file__).parent / 'sql'
 
@@ -85,8 +86,7 @@ with DAG(
             "data_interval" : latest.extra["data_interval"],
         }
 
-    # Call the metadata task function and assign the output to a variable
-    #### YOUR CODE HERE
+    metadata_out = metadata()
 
     # Build promotion tasks first — store handles in a dict so we can wire
     # cross-table dependencies after every task exists.
@@ -107,10 +107,13 @@ with DAG(
             sql_template = file.read_text()
             sql_rendered = ti.task.render_template(sql_template, context)
 
-            # Initialize an S3 Hook
-            # and push the sql_rendered string
-            # to the inputted s3 bucket and s3 key
-            #### YOUR CODE HERE
+            hook = S3Hook(aws_conn_id=AWS_CONN_ID)
+            hook.load_string(
+                string_data=sql_rendered,
+                key=s3_key,
+                bucket_name=s3_bucket,
+                replace=True,
+            )
 
         # Set up table-specific configurations
         payload = {"sql": f"s3://{S3_BUCKET}/{SQL_KEY}"}
@@ -145,17 +148,9 @@ with DAG(
             trigger_rule        = "none_failed_min_one_success",
         )
 
-        # Call the `upload` task function.
-        # Pass the SQL, S3_BUCKET, and SQL_KEY variables as arguments
-        # Assign the output to a variable
-        #### YOUR CODE HERE
-
-        # Set the metadata task upstream to the upload task
-        #### YOUR CODE HERE
-
-        # Store the upload task's output in the `upload_task` dictionary
-        # Use the table_name variable as the dictionary key
-        #### YOUR CODE HERE
+        upload_task = upload(SQL, S3_BUCKET, SQL_KEY)
+        metadata_out >> upload_task
+        upload_tasks[table_name] = upload_task
 
         # Store the `promote` task in the `promote_tasks` dictionary
         # - Use the table_name variable as the dictionary key
@@ -168,40 +163,41 @@ with DAG(
             table_name = table["table"]
             pk_expr    = ", ".join(table["upsert_keys"])
 
-            # Pass the following SQL query to an SQLCheckOperator with an Athena Connection
-            # - Ensure the task id is unique to each table
-            # - Ensure the task is triggered as long as
-            #   one upstream task succeeds and none have failed
-            # - Do not assign the operator to a variable. 
-            f"""
+            SQLCheckOperator(
+                task_id=f"check_{table_name}_unique",
+                conn_id=ATHENA_CONN_ID,
+                trigger_rule="none_failed_min_one_success",
+                sql=f"""
+                    SELECT CASE
+                        WHEN COUNT(*) = COUNT(DISTINCT ({pk_expr}))
+                        THEN 1 ELSE 0
+                    END
+                    FROM transactions.{table_name}
+                """,
+            )
+            
+
+
+        SQLCheckOperator(
+            task_id="check_events_version_id_nulls",
+            conn_id=ATHENA_CONN_ID,
+            trigger_rule="none_failed_min_one_success",
+            sql="""
                 SELECT CASE
-                    WHEN COUNT(*) = COUNT(DISTINCT ({pk_expr}))
+                    WHEN COUNT(*) = 0 THEN 1
+                    WHEN CAST(SUM(CASE WHEN version_id IS NULL THEN 1 ELSE 0 END) AS DOUBLE)
+                         / COUNT(*) < 0.30
                     THEN 1 ELSE 0
                 END
-                FROM transactions.{table_name}
-            """
-
-
-        # Pass the following SQL query to an SQLCheckOperator with an Athena Connection
-        # - Ensure the task is triggered as long as
-        #   one upstream task succeeds and none have failed
-        # - This task should be initialized outside of the for loop above
-        # - Do not assign the operator to a variable
-        """
-            SELECT CASE
-                WHEN COUNT(*) = 0 THEN 1
-                WHEN CAST(SUM(CASE WHEN version_id IS NULL THEN 1 ELSE 0 END) AS DOUBLE)
-                     / COUNT(*) < 0.30
-                THEN 1 ELSE 0
-            END
-            FROM transactions.events
-            """
+                FROM transactions.events
+            """,
+        )
 
 
     # Alter this task so it emits an event indicating transactions
     # have been updated. 
     @task(
-        #### YOUR CODE HERE
+        outlets=[TRANSACTIONS_COMPLETE],
         trigger_rule="none_failed"
         )
     def notify_complete() -> None:
@@ -211,18 +207,12 @@ with DAG(
     for table in TABLES:
         table_name = table["table"]
 
-        # Set the upload task (inside the upload_tasks dictionary) 
-        # upstream to the table's promote task (inside the `promote_task` dictionary)
-        #### YOUR CODE HERE
+        upload_tasks[table_name] >> promote_tasks[table_name]
 
         # Set inter table dependencies
         for upstream in table["depends_on"]:
             promote_tasks[upstream] >> promote_tasks[table_name]
 
-        # Set the table's promotion task inside the `promote_tasks` dictionary
-        # upstream to the `validate_transactions` task group
-        #### YOUR CODE HERE
+        promote_tasks[table_name] >> validate_transactions
 
-    # Set the `validate_transactions` task group upstream
-    # to the `notify_complete` task function.
-    #### YOUR CODE HERE
+    validate_transactions >> notify_complete()
