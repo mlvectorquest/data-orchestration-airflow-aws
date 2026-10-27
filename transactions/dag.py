@@ -14,7 +14,7 @@ WAREHOUSE_PATH         = f"s3://{S3_BUCKET}/iceberg-warehouse/transactions/"
 PROMOTE_SCRIPT         = CWD / "glue_script.py"
 GLUE_ROLE_NAME         = "dev-lakehouse-glue-role"
 AWS_CONN_ID            = "aws_default"
-ATHENA_CONN_ID         = "aws_default"
+ATHENA_CONN_ID         = "athena_default"
 REGION                 = 'us-east-1'
 SQL_DIR                = Path(__file__).parent / 'sql'
 
@@ -97,7 +97,7 @@ with DAG(
 
         table_name = table["table"]
         SQL        = SQL_DIR / f"{table_name}.sql"
-        SQL_KEY    = S3_SQL  + f"{table_name}.sql"
+        SQL_KEY    = S3_SQL  + f"/{table_name}.sql"
 
         # Render the table's SQL and push the rendered query to S3.
         @task(task_id=f"{table_name}_upload_sql")

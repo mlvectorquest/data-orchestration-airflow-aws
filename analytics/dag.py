@@ -27,7 +27,7 @@ with DAG(
     for query in SQL.glob("*.sql"):
 
         table_name = query.stem
-        SQL_KEY = S3_SQL + f"{table_name}.sql"
+        SQL_KEY = S3_SQL + f"/{table_name}.sql"
 
         @task(task_id=f"{table_name}_upload_sql")
         def upload(file, s3_bucket, s3_key, **context):

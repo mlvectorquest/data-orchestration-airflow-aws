@@ -7,12 +7,12 @@ from airflow.providers.amazon.aws.hooks.s3 import S3Hook
 # ── Config ─────────────────────────────────────────────────────────────────────
 S3_BUCKET = "{{ var.value.s3_bucket }}"
 
-LANDING_PREFIX = "landing"
+LANDING_PREFIX = "data_intervals"
 WAREHOUSE_LOCATION = f"s3://{S3_BUCKET}/iceberg-warehouse/raw/"
 ICEBERG_SCRIPT = str(Path(__file__).parent / "glue_script.py")
 
 AWS_CONN_ID = "aws_default"
-ATHENA_CONN_ID = "aws_default"
+ATHENA_CONN_ID = "athena_default"
 GLUE_ROLE_NAME = "dev-lakehouse-glue-role"
 
 # Keep this line unchanged
