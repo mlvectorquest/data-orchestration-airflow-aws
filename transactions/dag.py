@@ -200,8 +200,11 @@ with DAG(
         outlets=[TRANSACTIONS_COMPLETE],
         trigger_rule="none_failed"
         )
-    def notify_complete() -> None:
-        pass
+    def notify_complete(meta, outlet_events) -> None:
+        outlet_events[TRANSACTIONS_COMPLETE].extra = {
+            "data_interval": meta["data_interval"],
+            "tables": [t["table"] for t in TABLES],
+        }
         
     # Wire dependencies
     for table in TABLES:
@@ -215,4 +218,4 @@ with DAG(
 
         promote_tasks[table_name] >> validate_transactions
 
-    validate_transactions >> notify_complete()
+    validate_transactions >> notify_complete(metadata_out)

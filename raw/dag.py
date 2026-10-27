@@ -97,31 +97,26 @@ with DAG(
     )
 
     with TaskGroup("validate_raw") as validate_raw:
-        check_logs = SQLCheckOperator(
-            task_id="check_logs",
+        # One row-count check per discovered table, so no table names are hardcoded
+        SQLCheckOperator.partial(
+            task_id="check_table",
             conn_id=ATHENA_CONN_ID,
-            sql="""
-                SELECT COUNT(*) FROM raw.logs
-                WHERE data_interval = '{{ triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval'] }}'
-            """,
+        ).expand(
+            sql=table_keys.map(lambda key: (
+                f"SELECT COUNT(*) FROM raw.{key.strip('/').split('/')[-1]} "
+                "WHERE data_interval = '{{ triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval'] }}'"
+            ))
         )
-            
-        check_songs = SQLCheckOperator(
-            task_id="check_songs",
-            conn_id=ATHENA_CONN_ID,
-            sql="""
-                SELECT COUNT(*) FROM raw.songs
-                WHERE data_interval = '{{ triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval'] }}'
-            """
-        )
-        check_logs >> check_songs
-            
 
-    # Define a task that sets `outlets` to the 
+    # Define a task that sets `outlets` to the
     # Asset used to trigger the transactions dag
     @task(outlets=[raw_ingestion_complete])
-    def notify_transactions(outlet_events, triggering_asset_events):
+    def notify_transactions(keys, outlet_events, triggering_asset_events):
         data_interval = triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval']
-        outlet_events[raw_ingestion_complete].extra = {"data_interval": data_interval}
+        tables = [key.strip("/").split("/")[-1] for key in keys]
+        outlet_events[raw_ingestion_complete].extra = {
+            "data_interval": data_interval,
+            "tables": tables,
+        }
 
-    submit_glue_jobs >> validate_raw >> notify_transactions()
+    submit_glue_jobs >> validate_raw >> notify_transactions(table_keys)
