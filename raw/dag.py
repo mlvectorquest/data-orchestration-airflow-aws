@@ -96,17 +96,23 @@ with DAG(
         })
     )
 
+    # Build one row-count query per discovered table. The final SQL is built in
+    # Python because Jinja is not rendered inside values mapped from XCom.
+    @task(inlets=[raw_ingestion_pending])
+    def build_check_queries(keys, inlet_events):
+        data_interval = inlet_events[raw_ingestion_pending][-1].extra["data_interval"]
+        return [
+            f"SELECT COUNT(*) FROM raw.{key.strip('/').split('/')[-1]} "
+            f"WHERE data_interval = '{data_interval}'"
+            for key in keys
+        ]
+
     with TaskGroup("validate_raw") as validate_raw:
         # One row-count check per discovered table, so no table names are hardcoded
         SQLCheckOperator.partial(
             task_id="check_table",
             conn_id=ATHENA_CONN_ID,
-        ).expand(
-            sql=table_keys.map(lambda key: (
-                f"SELECT COUNT(*) FROM raw.{key.strip('/').split('/')[-1]} "
-                "WHERE data_interval = '{{ triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval'] }}'"
-            ))
-        )
+        ).expand(sql=build_check_queries(table_keys))
 
     # Define a task that sets `outlets` to the
     # Asset used to trigger the transactions dag
