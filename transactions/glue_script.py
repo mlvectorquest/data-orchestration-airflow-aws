@@ -58,6 +58,9 @@ else:
             spark.sql(f"ALTER TABLE {target_table} ADD COLUMN {col} {col_type}")
 
 
+    # Match on upsert keys only. Adding partition keys to the ON clause (for partition
+    # pruning) made the events merge fail with: "Couldn't find event_date#9 in [...]".
+    # Suspected Spark/Iceberg planner issue with partition columns in a merge condition.
     on_clause = " AND ".join([f"t.{k} = s.{k}" for k in upsert_keys])
     
     spark.sql(f"""
