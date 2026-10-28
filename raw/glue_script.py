@@ -11,7 +11,11 @@ args = getResolvedOptions(sys.argv, [
     "table", 
     "landing_path",
     "data_interval",
+    "primary_keys",
 ])
+
+# Key columns to deduplicate on, passed by the DAG as a comma-separated string
+primary_keys = args["primary_keys"].split(",")
 
 # ── Configure spark ───────────────────────────────────────────────────────────
 sc = SparkContext()
@@ -43,6 +47,9 @@ if df.rdd.isEmpty():
 
 # Add data_interval column to the dataframe
 df = df.withColumn("data_interval", F.lit(data_interval))
+
+# Deduplicate on the table's primary key
+df = df.dropDuplicates(primary_keys)
 
 # ── Write to Iceberg ────────────────────────────────────────────────────────────
 

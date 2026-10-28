@@ -1,19 +1,21 @@
 import json
 from pathlib import Path
-from airflow.sdk import DAG, Asset, task
+from airflow.sdk import DAG, Asset
 from airflow.providers.amazon.aws.operators.glue import GlueJobOperator
-from airflow.providers.amazon.aws.hooks.s3 import S3Hook
+from airflow.providers.common.sql.operators.sql import SQLCheckOperator
 
 
 CWD                    = Path(__file__).parent
-SQL                    = CWD / "sql"
 GLUE_SCRIPT            = CWD / "glue_script.py"
 S3_BUCKET              = "{{ var.value.s3_bucket }}"
-S3_SQL                 = "artifacts/analytics/sql/{{ dag_run.run_id }}"
 WAREHOUSE_PATH         = f"s3://{S3_BUCKET}/iceberg-warehouse/analytics/"
 GLUE_ROLE_NAME         = "dev-lakehouse-glue-role"
 AWS_CONN_ID            = "aws_default"
+ATHENA_CONN_ID         = "athena_default"
 REGION                 = "us-east-1"
+
+# Analytics tables, each built by a function of the same name in glue_script.py
+ANALYTICS_TABLES = ["artist_facts", "session_facts", "song_facts", "user_facts"]
 
 TRANSACTIONS_COMPLETE = Asset("transactions_complete")
 
@@ -22,32 +24,12 @@ with DAG(
     schedule=[TRANSACTIONS_COMPLETE],
     max_active_runs=1,
     max_active_tasks=2,
+    default_args={"retries": 2},
 ) as dag:
-    # Loop over sql files
-    for query in SQL.glob("*.sql"):
 
-        table_name = query.stem
-        SQL_KEY = S3_SQL + f"/{table_name}.sql"
+    for table_name in ANALYTICS_TABLES:
 
-        @task(task_id=f"{table_name}_upload_sql")
-        def upload(file, s3_bucket, s3_key, **context):
-
-            ti = context["ti"]
-            sql_template = file.read_text()
-            sql_rendered = ti.task.render_template(sql_template, context)
-
-            s3_hook = S3Hook(aws_conn_id=AWS_CONN_ID)
-            s3_hook.load_string(
-                string_data=sql_rendered,
-                key=s3_key,
-                bucket_name=s3_bucket,
-                replace=True
-            )
-
-        payload = {
-            "sql"   : f"s3://{S3_BUCKET}/{SQL_KEY}",
-            "table" : table_name,
-        }
+        payload = {"table": table_name}
 
         promote = GlueJobOperator(
             task_id             = f"promote_{table_name}",
@@ -75,4 +57,11 @@ with DAG(
             aws_conn_id         = AWS_CONN_ID,
         )
 
-        upload(query, S3_BUCKET, SQL_KEY) >> promote
+        # Fail the run if the rebuilt table came out empty
+        check = SQLCheckOperator(
+            task_id=f"check_{table_name}_not_empty",
+            conn_id=ATHENA_CONN_ID,
+            sql=f"SELECT COUNT(*) FROM analytics.{table_name}",
+        )
+
+        promote >> check

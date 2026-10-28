@@ -68,6 +68,7 @@ with DAG(
     schedule=[RAW_INGESTION_COMPLETE],
     max_active_tasks=2,
     max_active_runs=1,
+    default_args={"retries": 2},
 ) as dag:
 
 

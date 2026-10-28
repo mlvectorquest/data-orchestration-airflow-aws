@@ -15,6 +15,16 @@ AWS_CONN_ID = "aws_default"
 ATHENA_CONN_ID = "athena_default"
 GLUE_ROLE_NAME = "dev-lakehouse-glue-role"
 
+# Columns that identify a record in each raw table. Every table found in the
+# landing folder needs an entry here, otherwise the DAG fails to build its job.
+# logs:  one row per play event, identified by (userId, sessionId, itemInSession)
+# songs: one row per song version, identified by (song_id, duration). song_id
+#        alone would collapse the versions that transactions.song_versions needs.
+PRIMARY_KEYS = {
+    "logs": ["userId", "sessionId", "itemInSession"],
+    "songs": ["song_id", "duration"],
+}
+
 # Keep this line unchanged
 REGION = "us-east-1"
 
@@ -24,12 +34,25 @@ raw_ingestion_pending = Asset(name="raw_ingestion_pending")
 # Initialize an Asset to represent completion of raw ingestion
 raw_ingestion_complete = Asset(name="raw_ingestion_complete")
 
-# Initialize a DAG 
+def build_ingest_kwargs(key):
+    """Build the Glue job name and arguments for one landing prefix."""
+    table = key.strip("/").split("/")[-1]
+    script_args = {
+        "--table": table,
+        "--landing_path": f"s3://{S3_BUCKET}/{key}",
+        "--data_interval": "{{ triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval'] }}",
+        "--primary_keys": ",".join(PRIMARY_KEYS[table]),
+    }
+    return {"job_name": f"ingest_raw_{table}", "script_args": script_args}
+
+
+# Initialize a DAG
 with DAG(
     dag_id="raw",
     schedule=[raw_ingestion_pending],
     max_active_runs=1,
-    max_active_tasks=2
+    max_active_tasks=2,
+    default_args={"retries": 2},
 ) as dag:
 
     # Define an airflow python task named `capture_landing_keys`
@@ -86,14 +109,7 @@ with DAG(
             },
         }
     ).expand_kwargs(
-        table_keys.map(lambda key: {
-            "job_name": f"ingest_raw_{key.strip('/').split('/')[-1]}",
-            "script_args": {
-                "--table": key.strip("/").split("/")[-1],
-                "--landing_path": f"s3://{S3_BUCKET}/{key}",
-                "--data_interval": "{{ triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval'] }}"
-            }
-        })
+        table_keys.map(build_ingest_kwargs)
     )
 
     # Build one row-count query per discovered table. The final SQL is built in
