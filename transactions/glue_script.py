@@ -58,10 +58,7 @@ else:
             spark.sql(f"ALTER TABLE {target_table} ADD COLUMN {col} {col_type}")
 
 
-    # Partition keys are added to the match keys so Spark can prune partitions
-    # at run time. Not guaranteed: the dates come from the staging view, not literals.
-    match_keys = upsert_keys +[k for k in partition_keys if k not in upsert_keys]
-    on_clause = " AND ".join([f"t.{k} = s.{k}" for k in match_keys])
+    on_clause = " AND ".join([f"t.{k} = s.{k}" for k in upsert_keys])
     
     spark.sql(f"""
     MERGE INTO {target_table} t
