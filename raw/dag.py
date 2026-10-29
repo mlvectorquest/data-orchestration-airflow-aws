@@ -1,5 +1,5 @@
 from pathlib import Path
-from airflow.sdk import DAG, Asset, task, TaskGroup
+from airflow.sdk import DAG, Asset, task, TaskGroup, Variable
 from airflow.providers.amazon.aws.operators.glue import GlueJobOperator
 from airflow.providers.common.sql.operators.sql import SQLCheckOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
@@ -15,16 +15,6 @@ AWS_CONN_ID = "aws_default"
 ATHENA_CONN_ID = "athena_default"
 GLUE_ROLE_NAME = "dev-lakehouse-glue-role"
 
-# Columns that identify a record in each raw table. Every table found in the
-# landing folder needs an entry here, otherwise the DAG fails to build its job.
-# logs:  one row per play event, identified by (userId, sessionId, itemInSession)
-# songs: one row per song version, identified by (song_id, duration). song_id
-#        alone would collapse the versions that transactions.song_versions needs.
-PRIMARY_KEYS = {
-    "logs": ["userId", "sessionId", "itemInSession"],
-    "songs": ["song_id", "duration"],
-}
-
 # Keep this line unchanged
 REGION = "us-east-1"
 
@@ -37,11 +27,14 @@ raw_ingestion_complete = Asset(name="raw_ingestion_complete")
 def build_ingest_kwargs(key):
     """Build the Glue job name and arguments for one landing prefix."""
     table = key.strip("/").split("/")[-1]
+    # Primary keys come from the `raw_primary_keys` Variable, not from this file
+    primary_keys = Variable.get("raw_primary_keys", deserialize_json=True, default={}).get(table, [])
     script_args = {
         "--table": table,
         "--landing_path": f"s3://{S3_BUCKET}/{key}",
         "--data_interval": "{{ triggering_asset_events.for_asset(name='raw_ingestion_pending')[-1].extra['data_interval'] }}",
-        "--primary_keys": ",".join(PRIMARY_KEYS[table]),
+        # "ALL" means no key is configured, so the script dedups on every column
+        "--primary_keys": ",".join(primary_keys) or "ALL",
     }
     return {"job_name": f"ingest_raw_{table}", "script_args": script_args}
 
@@ -112,23 +105,26 @@ with DAG(
         table_keys.map(build_ingest_kwargs)
     )
 
-    # Build one row-count query per discovered table. The final SQL is built in
-    # Python because Jinja is not rendered inside values mapped from XCom.
+    # One entry per discovered table, with the interval to check. The interval
+    # comes from Python because Jinja is not rendered inside values mapped from XCom.
     @task(inlets=[raw_ingestion_pending])
-    def build_check_queries(keys, inlet_events):
+    def build_check_args(keys, inlet_events):
         data_interval = inlet_events[raw_ingestion_pending][-1].extra["data_interval"]
         return [
-            f"SELECT COUNT(*) FROM raw.{key.strip('/').split('/')[-1]} "
-            f"WHERE data_interval = '{data_interval}'"
-            for key in keys
+            {"table": k.strip("/").split("/")[-1], "data_interval": data_interval}
+            for k in keys
         ]
 
     with TaskGroup("validate_raw") as validate_raw:
         # One row-count check per discovered table, so no table names are hardcoded
         SQLCheckOperator.partial(
-            task_id="check_table",
+            task_id="check_raw",
             conn_id=ATHENA_CONN_ID,
-        ).expand(sql=build_check_queries(table_keys))
+        ).expand_kwargs(
+            build_check_args(table_keys).map(lambda c: {
+                "sql": f"SELECT COUNT(*) FROM raw.{c['table']} WHERE data_interval = '{c['data_interval']}'"
+            })
+        )
 
     # Define a task that sets `outlets` to the
     # Asset used to trigger the transactions dag

@@ -14,7 +14,7 @@ args = getResolvedOptions(sys.argv, [
     "primary_keys",
 ])
 
-# Key columns to deduplicate on, passed by the DAG as a comma-separated string
+# Key columns to dedup on, passed by the DAG as a comma-separated string, or "ALL"
 primary_keys = args["primary_keys"].split(",")
 
 # ── Configure spark ───────────────────────────────────────────────────────────
@@ -49,7 +49,11 @@ if df.rdd.isEmpty():
 df = df.withColumn("data_interval", F.lit(data_interval))
 
 # Deduplicate on the table's primary key
-df = df.dropDuplicates(primary_keys)
+if primary_keys == ["ALL"]:
+    print(f"[{table}] No primary key configured, deduplicating on all columns")
+    df = df.dropDuplicates()
+else:
+    df = df.dropDuplicates(primary_keys)
 
 # ── Write to Iceberg ────────────────────────────────────────────────────────────
 
